@@ -1,0 +1,64 @@
+#파라미터값계산
+# 1. 필요한 라이브러리 불러오기
+import pandas as pd
+import numpy as np
+
+# 2. Colab에 파일 업로드하기
+from google.colab import files
+uploaded = files.upload()
+
+# 3. 업로드한 파일을 pandas로 불러오기
+df = pd.read_excel(list(uploaded.keys())[0])
+
+# 4. 필요한 컬럼만 추출하기 (D열 = 등락률, E열 = D열 * x, B열 = 종시률, F열 = 종시차)
+df = df[['등락률', '종시률', '종시차']]  # 이 컬럼 이름들은 실제 엑셀 파일에서 확인하고 수정할 필요가 있습니다.
+
+# 5. 최적의 x값을 찾기 위한 준비 (0.01부터 50.00까지의 x값 범위)
+x_values = np.arange(0.01, 50.01, 0.01)
+results = []
+
+for x in x_values:
+    df['E'] = df['등락률'] * x
+
+    # 조건에 따라 손익 계산
+    df['손익'] = np.where(
+        (df['등락률'] > 0) & (df['종시률'] > df['E']),
+        df['종시차'],
+        np.where(
+            (df['등락률'] > 0) & (df['종시률'] < df['E']),
+            -df['종시차'],
+            np.where(
+                (df['등락률'] < 0) & (df['종시률'] > df['E']),
+                df['종시차'],
+                np.where(
+                    (df['등락률'] < 0) & (df['종시률'] < df['E']),
+                    -df['종시차'],
+                    0
+                )
+            )
+        )
+    )
+
+    # G열: BUY 혹은 SELL을 계산하는 부분
+    df['진입타입'] = np.where(
+        (df['등락률'] > 0) & (df['종시률'] > df['E']), 'BUY',
+        np.where(
+            (df['등락률'] < 0) & (df['종시률'] < df['E']), 'SELL',
+            'NONE'
+        )
+    )
+
+    cumulative_profit = df['손익'].sum()
+    results.append((x, cumulative_profit))
+
+# 6. 누적 손익이 가장 큰 x값들 순서대로 정렬
+sorted_results = sorted(results, key=lambda x: x[1], reverse=True)
+
+# 7. 결과를 데이터프레임으로 변환
+results_df = pd.DataFrame(sorted_results, columns=['x', '누적 손익'])
+
+# 8. 엑셀 파일로 저장
+results_df.to_excel('cumulative_profit_results_extended.xlsx', index=False)
+
+# 9. Colab에서 다운로드 링크 생성
+files.download('cumulative_profit_results_extended.xlsx')
