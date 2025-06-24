@@ -1,0 +1,100 @@
+import math
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from tqdm import tqdm
+
+#이 코드는 아직 잘되는지 모르게씀
+# 데이터 로드
+data = pd.read_csv(r'C:\Users\user\Desktop\오늘파일\엠티\cbkp.txt', delimiter='\t', header=None,
+                   names=['Date', 'Open', 'High', 'Low', 'Close'])
+
+# 파생 지표 계산
+data['OC'] = abs(data['Open'] - data['Close'])
+data['NOC'] = (data['High'] - data['Low']) - data['OC']
+data['HC_LC'] = data.apply(lambda row: max(row['High'] - row['Close'], row['Close'] - row['Low']), axis=1)
+data['OH_OL'] = data.apply(lambda row: max(row['High'] - row['Open'], row['Open'] - row['Low']), axis=1)
+data['OC_NOC'] = data.apply(lambda row: max(row['OC'], row['NOC']), axis=1)
+data['HC_LC_OH_OL'] = data.apply(lambda row: max(row['HC_LC'], row['OH_OL']), axis=1)
+data['HC_LC_OC_NOC'] = data.apply(lambda row: max(row['HC_LC'], row['OC_NOC']), axis=1)
+data['OH_OL_OC_NOC'] = data.apply(lambda row: max(row['OH_OL'], row['OC_NOC']), axis=1)
+data['HC_LC_OH_OL_OC_NOC'] = data.apply(lambda row: max(row['HC_LC'], row['OH_OL'], row['OC_NOC']), axis=1)
+
+Buycoef = 0.672
+Sellcoef = 0.357
+
+def calculate_profits(data, threshold, Buycoef, Sellcoef, mode='min'):
+    buy_profits, sell_profits = [], []
+    for i in range(1, len(data)):
+        value = data['HC_LC_OH_OL_OC_NOC'].iloc[i-1] / data['Close'].iloc[i-1]
+        if (mode == 'min' and threshold < value) or (mode == 'max' and value < threshold):
+            buy_price = data['Open'].iloc[i] + math.ceil((data['HC_LC_OH_OL_OC_NOC'].iloc[i-1] * Buycoef) * 20) * 0.05
+            sell_price = data['Open'].iloc[i] - math.ceil((data['HC_LC_OH_OL_OC_NOC'].iloc[i-1] * Sellcoef) * 20) * 0.05
+
+            if data['High'].iloc[i] >= round(buy_price, 3):
+                buy_profits.append(data['Close'].iloc[i] - buy_price)
+            else:
+                buy_profits.append(0)
+
+            if data['Low'].iloc[i] <= round(sell_price, 3):
+                sell_profits.append(sell_price - data['Close'].iloc[i])
+            else:
+                sell_profits.append(0)
+        else:
+            buy_profits.append(0)
+            sell_profits.append(0)
+
+    buy_cum = np.cumsum(buy_profits)
+    sell_cum = np.cumsum(sell_profits)
+    total = buy_cum + sell_cum
+    return buy_cum, sell_cum, total
+
+def find_best_filter(data, Buycoef, Sellcoef, mode='min'):
+    if mode == 'min':
+        thresholds = np.arange(0.0015, 0.0060, 0.0001)
+    else:
+        thresholds = np.arange(0.0165, 0.1722, 0.0001)
+
+    best_profit = -np.inf
+    best_threshold = None
+    candidates = []
+
+    desc_label = f"filter_{mode} profit calc"
+    for threshold in tqdm(thresholds, desc=desc_label, leave=False, dynamic_ncols=True):
+        _, _, total_profit = calculate_profits(data, threshold, Buycoef, Sellcoef, mode=mode)
+        profit = round(total_profit[-1], 3)
+        if profit > best_profit:
+            best_profit = profit
+            candidates = [threshold]
+        elif profit == best_profit:
+            candidates.append(threshold)
+
+    if candidates:
+        best_threshold = max(candidates) if mode == 'min' else min(candidates)
+    return best_threshold, best_profit
+
+# 최적 필터 값 탐색
+best_filter_min, best_profit_min = find_best_filter(data, Buycoef, Sellcoef, mode='min')
+best_filter_max, best_profit_max = find_best_filter(data, Buycoef, Sellcoef, mode='max')
+
+# 수익 곡선 계산
+buy_cum, sell_cum, total = calculate_profits(data, best_filter_min, Buycoef, Sellcoef, mode='min')
+
+# 결과 출력
+print(f"Best filter_min: {round(best_filter_min, 5)}")
+print(f"Best filter_max: {round(best_filter_max, 5)}")
+print(f"Cumulative Profit with Buycoef: {round(buy_cum[-1], 3)}")
+print(f"Cumulative Profit with Sellcoef: {round(sell_cum[-1], 3)}")
+print(f"Total Profit: {round(total[-1], 3)}")
+
+# 수익 곡선 시각화
+plt.figure(figsize=(12, 6))
+plt.plot(buy_cum, label='Cumulative Buy Profit')
+plt.plot(sell_cum, label='Cumulative Sell Profit')
+plt.plot(total, label='Total Profit')
+plt.xlabel('Index')
+plt.ylabel('Profit')
+plt.title('Equity Curve for Buy, Sell and Total Profit')
+plt.legend()
+plt.grid(True)
+plt.show()
