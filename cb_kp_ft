@@ -1,0 +1,179 @@
+import math
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+
+#진행상황이 들어가는 tqdm추가해얄듯 넘느림
+# 데이터 로드
+data = pd.read_csv(r'C:\Users\user\Desktop\오늘파일\엠티\cbkp.txt', delimiter='\t', header=None, names=['Date', 'Open', 'High', 'Low', 'Close'])
+
+# OC 및 NOC를 계산
+data['OC'] = abs(data['Open'] - data['Close'])
+data['NOC'] = (data['High'] - data['Low']) - data['OC']
+
+# 다양한 max 계산을 apply를 사용하여 구현
+data['HC_LC'] = data.apply(lambda row: max(row['High'] - row['Close'], row['Close'] - row['Low']), axis=1)
+data['OH_OL'] = data.apply(lambda row: max(row['High'] - row['Open'], row['Open'] - row['Low']), axis=1)
+data['OC_NOC'] = data.apply(lambda row: max(row['OC'], row['NOC']), axis=1)
+
+data['HC_LC_OH_OL'] = data.apply(lambda row: max(row['HC_LC'], row['OH_OL']), axis=1)
+data['HC_LC_OC_NOC'] = data.apply(lambda row: max(row['HC_LC'], row['OC_NOC']), axis=1)
+data['OH_OL_OC_NOC'] = data.apply(lambda row: max(row['OH_OL'], row['OC_NOC']), axis=1)
+data['HC_LC_OH_OL_OC_NOC'] = data.apply(lambda row: max(row['HC_LC'], row['OH_OL'], row['OC_NOC']), axis=1)
+data['High_Low'] = data['High'] - data['Low']
+data['Close_Pct'] = data['Close'] * 0.01
+
+
+Buycoef = 0.672
+Sellcoef = 0.357
+
+
+def calculate_profits_with_min(data, filter_min, Buycoef, Sellcoef):
+    buy_profits = []
+    sell_profits = []
+    for i in range(1, len(data)):
+        condition_min = filter_min < data['HC_LC_OH_OL_OC_NOC'].iloc[i-1] / data['Close'].iloc[i-1]
+        
+        if condition_min:
+            buy_price = data['Open'].iloc[i] + math.ceil((data['HC_LC_OH_OL_OC_NOC'].iloc[i-1] * Buycoef) * 20) * 0.05
+            if data['High'].iloc[i] >= round(buy_price,3):
+                profit = data['Close'].iloc[i] - buy_price
+                buy_profits.append(profit)
+            else:
+                buy_profits.append(0)
+            
+            sell_price = data['Open'].iloc[i] - math.ceil((data['HC_LC_OH_OL_OC_NOC'].iloc[i-1] * Sellcoef) * 20) * 0.05
+            if data['Low'].iloc[i] <= round(sell_price,3):
+                profit = sell_price - data['Close'].iloc[i]
+                sell_profits.append(profit)
+            else:
+                sell_profits.append(0)
+        else:
+            buy_profits.append(0)
+            sell_profits.append(0)
+    
+    cumulative_profit_Buycoef = np.cumsum(buy_profits)  # 누적 합 계산
+    cumulative_profit_Sellcoef = np.cumsum(sell_profits)  # 누적 합 계산
+    total_profit = cumulative_profit_Buycoef + cumulative_profit_Sellcoef
+    return cumulative_profit_Buycoef, cumulative_profit_Sellcoef, total_profit
+
+def calculate_profits_with_max(data, filter_max, Buycoef, Sellcoef):
+    buy_profits = []
+    sell_profits = []
+    for i in range(1, len(data)):
+        condition_max = data['HC_LC_OH_OL_OC_NOC'].iloc[i-1] / data['Close'].iloc[i-1] < filter_max
+        
+        if condition_max:
+            buy_price = data['Open'].iloc[i] + math.ceil((data['HC_LC_OH_OL_OC_NOC'].iloc[i-1] * Buycoef) * 20) * 0.05
+            if data['High'].iloc[i] >= round(buy_price,3):
+                profit = data['Close'].iloc[i] - buy_price
+                buy_profits.append(profit)
+            else:
+                buy_profits.append(0)
+            
+            sell_price = data['Open'].iloc[i] - math.ceil((data['HC_LC_OH_OL_OC_NOC'].iloc[i-1] * Sellcoef) * 20) * 0.05
+            if data['Low'].iloc[i] <= round(sell_price,3):
+                profit = sell_price - data['Close'].iloc[i]
+                sell_profits.append(profit)
+            else:
+                sell_profits.append(0)
+        else:
+            buy_profits.append(0)
+            sell_profits.append(0)
+    
+    cumulative_profit_Buycoef = np.cumsum(buy_profits)  # 누적 합 계산
+    cumulative_profit_Sellcoef = np.cumsum(sell_profits)  # 누적 합 계산
+    total_profit = cumulative_profit_Buycoef + cumulative_profit_Sellcoef
+    return cumulative_profit_Buycoef, cumulative_profit_Sellcoef, total_profit
+
+def find_best_filter_min(data, Buycoef, Sellcoef):
+    best_profit_min = -np.inf
+    best_filter_min = None
+    min_values = []
+
+    for filter_min in np.arange(0.0015, 0.0060, 0.0001):  # Adjust range as needed
+        _, _, total_profit_min = calculate_profits_with_min(data, filter_min, Buycoef, Sellcoef)
+        if round(total_profit_min[-1],3) > best_profit_min:
+            best_profit_min = round(total_profit_min[-1],3)
+            min_values = [filter_min]
+        elif round(total_profit_min[-1],3) == best_profit_min:
+            min_values.append(filter_min)
+
+    if min_values:
+        best_filter_min = max(min_values)  # 동일한 최대값이 있을 때 가장 큰 값 선택
+
+    return best_filter_min, best_profit_min
+
+def find_best_filter_max(data, Buycoef, Sellcoef):
+    best_profit_max = -np.inf
+    best_filter_max = None
+    max_values = []
+
+    for filter_max in np.arange(0.0165, 0.1722, 0.0001):  # Adjust range as needed
+        _, _, total_profit_max = calculate_profits_with_max(data, filter_max, Buycoef, Sellcoef)
+        if round(total_profit_max[-1],3) > best_profit_max:
+            best_profit_max = round(total_profit_max[-1],3)
+            max_values = [filter_max]
+        elif round(total_profit_max[-1],3) == best_profit_max:
+            max_values.append(filter_max)
+
+    if max_values:
+        best_filter_max = min(max_values)  # 동일한 최대값이 있을 때 가장 작은 값 선택
+
+    return best_filter_max, best_profit_max
+
+# 최적의 필터 값을 찾기
+best_filter_min, best_profit_min = find_best_filter_min(data, Buycoef, Sellcoef)
+best_filter_max, best_profit_max = find_best_filter_max(data, Buycoef, Sellcoef)
+
+# 최적 필터 값을 사용하여 거래 내역 계산
+cumulative_profit_Buycoef, cumulative_profit_Sellcoef, total_profit = calculate_profits_with_min(data, best_filter_min, Buycoef, Sellcoef)
+
+print(f"Best filter_min: {round(best_filter_min,5)}")
+print(f"Best filter_max: {round(best_filter_max,5)}")
+print(f"Cumulative Profit with Buycoef: {round(cumulative_profit_Buycoef[-1],3)}")
+print(f"Cumulative Profit with Sellcoef: {round(cumulative_profit_Sellcoef[-1],3)}")
+print(f"Total Profit: {round(total_profit[-1],3)}")
+
+# 수익 곡선 플롯
+plt.figure(figsize=(12, 6))
+plt.plot(cumulative_profit_Buycoef, label='Cumulative Buy Profit')
+plt.plot(cumulative_profit_Sellcoef, label='Cumulative Sell Profit')
+plt.plot(total_profit, label='Total Profit')
+plt.xlabel('Index')
+plt.ylabel('Profit')
+plt.title('Equity Curve for Buy, Sell and Total Profit')
+plt.legend()
+plt.show()
+
+# Best filter_min: 0.0030
+# Best filter_max: 0.0331
+# Cumulative Profit with Buycoef: 129.25
+# Cumulative Profit with Sellcoef: 336.65
+# Total Profit: 465.9
+
+# Best filter_min: 0.0030 (~24.08.06)
+# Best filter_max: 0.0331 (~24.08.06)
+# Cumulative Profit with Buycoef: 128.85 -> 130.65
+# Cumulative Profit with Sellcoef: 330.90 -> 332.90
+# Total Profit: 459.75 -> 463.55
+
+# Best filter_min: 0.0030 (~24.09.11)
+# Best filter_max: 0.0331 (~24.09.11)
+# Cumulative Profit with Buycoef: 139.35
+# Cumulative Profit with Sellcoef: 338.4
+# Total Profit: 477.75
+
+
+# Best filter_min: 0.003 (~ 25.05.27)
+# Best filter_max: 0.0861
+# Cumulative Profit with Buycoef: 138.25
+# Cumulative Profit with Sellcoef: 347.7
+# Total Profit: 486.55-> 485.95????
+
+
+# Best filter_min: 0.003
+# Best filter_max: 0.0861
+# Cumulative Buy Profit: 134.25
+# Cumulative Sell Profit: 347.7
+# Total Profit: 481.95
