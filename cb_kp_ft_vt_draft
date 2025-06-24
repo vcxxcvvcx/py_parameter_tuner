@@ -119,3 +119,13 @@ plt.legend()
 plt.grid(True)
 plt.tight_layout()
 plt.show()
+
+
+
+
+# Best filter_min: 0.003
+# Best filter_max: 0.0861
+# Cumulative Buy Profit: 134.25
+# Cumulative Sell Profit: 347.7
+# Total Profit: 481.95
+
