@@ -1,0 +1,123 @@
+import math
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from tqdm import tqdm
+
+# tqdm 설정
+import sys
+from contextlib import contextmanager
+
+@contextmanager
+def tqdm_redirected():
+    class DummyTqdmFile:
+        def __init__(self, file): self.file = file
+        def write(self, x):
+            if len(x.rstrip()) > 0:
+                tqdm.write(x, file=self.file)
+        def flush(self): return getattr(self.file, "flush", lambda: None)()
+
+    old_stdout = sys.stdout
+    try:
+        sys.stdout = DummyTqdmFile(sys.stdout)
+        yield
+    finally:
+        sys.stdout = old_stdout
+
+# 데이터 로드
+data = pd.read_csv(r'C:\Users\user\Desktop\오늘파일\엠티\cbkp.txt', delimiter='\t', header=None, names=['Date', 'Open', 'High', 'Low', 'Close'])
+
+# OC 및 NOC 계산
+data['OC'] = np.abs(data['Open'] - data['Close'])
+data['NOC'] = (data['High'] - data['Low']) - data['OC']
+data['OC_NOC'] = np.maximum(data['OC'], data['NOC'])
+
+# 변동성 조합 계산
+data['HC_LC'] = np.maximum(data['High'] - data['Close'], data['Close'] - data['Low'])
+data['OH_OL'] = np.maximum(data['High'] - data['Open'], data['Open'] - data['Low'])
+data['HC_LC_OH_OL'] = np.maximum(data['HC_LC'], data['OH_OL'])
+data['HC_LC_OC_NOC'] = np.maximum(data['HC_LC'], data['OC_NOC'])
+data['OH_OL_OC_NOC'] = np.maximum(data['OH_OL'], data['OC_NOC'])
+data['HC_LC_OH_OL_OC_NOC'] = np.maximum.reduce([data['HC_LC'], data['OH_OL'], data['OC_NOC']])
+data['High_Low'] = data['High'] - data['Low']
+data['Close_Pct'] = data['Close'] * 0.01
+
+Buycoef = 0.672
+Sellcoef = 0.357
+
+# MDD, 승률, 트레이드 횟수 계산 함수
+def calculate_metrics(profits):
+    profits = np.array(profits)
+    equity_curve = np.cumsum(profits)
+    drawdown = equity_curve - np.maximum.accumulate(equity_curve)
+    mdd = np.min(drawdown)
+    trades = len(profits)
+    wins = np.sum(profits > 0)
+    win_rate = wins / trades if trades > 0 else 0
+    return mdd, win_rate, trades
+
+def calculate_profits_with_min(data, filter_min, Buycoef, Sellcoef):
+    buy_profits = []
+    sell_profits = []
+    for i in tqdm(range(1, len(data)), desc="filter_min profit calc", leave=False):
+        condition_min = filter_min < data['HC_LC_OH_OL_OC_NOC'].iloc[i-1] / data['Close'].iloc[i-1]
+        if condition_min:
+            buy_price = data['Open'].iloc[i] + math.ceil((data['HC_LC_OH_OL_OC_NOC'].iloc[i-1] * Buycoef) * 20) * 0.05
+            if data['High'].iloc[i] >= round(buy_price, 3):
+                buy_profits.append(data['Close'].iloc[i] - buy_price)
+            else:
+                buy_profits.append(0)
+
+            sell_price = data['Open'].iloc[i] - math.ceil((data['HC_LC_OH_OL_OC_NOC'].iloc[i-1] * Sellcoef) * 20) * 0.05
+            if data['Low'].iloc[i] <= round(sell_price, 3):
+                sell_profits.append(sell_price - data['Close'].iloc[i])
+            else:
+                sell_profits.append(0)
+        else:
+            buy_profits.append(0)
+            sell_profits.append(0)
+
+    return buy_profits, sell_profits
+
+def find_best_filter_min(data, Buycoef, Sellcoef):
+    best_profit_min = -np.inf
+    best_filter_min = None
+    with tqdm_redirected():
+        for filter_min in tqdm(np.arange(0.0015, 0.0060, 0.0001), desc="searching best filter_min"):
+            buy_p, sell_p = calculate_profits_with_min(data, filter_min, Buycoef, Sellcoef)
+            total_profit = np.cumsum(np.add(buy_p, sell_p))
+            if round(total_profit[-1], 3) > best_profit_min:
+                best_profit_min = round(total_profit[-1], 3)
+                best_filter_min = filter_min
+    return best_filter_min, best_profit_min
+
+# 필터 찾기 및 수익 계산
+best_filter_min, best_profit_min = find_best_filter_min(data, Buycoef, Sellcoef)
+buy_p, sell_p = calculate_profits_with_min(data, best_filter_min, Buycoef, Sellcoef)
+total_profit = np.add(buy_p, sell_p)
+cumulative_total = np.cumsum(total_profit)
+
+# 추가 지표 계산
+mdd, win_rate, trades = calculate_metrics(total_profit)
+
+# 출력
+print(f"\nBest filter_min: {round(best_filter_min,5)}")
+print(f"Cumulative Buy Profit: {round(np.sum(buy_p),3)}")
+print(f"Cumulative Sell Profit: {round(np.sum(sell_p),3)}")
+print(f"Total Profit: {round(cumulative_total[-1],3)}")
+print(f"MDD: {round(mdd, 3)}")
+print(f"Win Rate: {round(win_rate * 100, 2)}%")
+print(f"Total Trades: {trades}")
+
+# 시각화
+plt.figure(figsize=(12, 6))
+plt.plot(np.cumsum(buy_p), label='Cumulative Buy Profit')
+plt.plot(np.cumsum(sell_p), label='Cumulative Sell Profit')
+plt.plot(cumulative_total, label='Total Profit')
+plt.xlabel('Index')
+plt.ylabel('Profit')
+plt.title('Equity Curve')
+plt.legend()
+plt.grid(True)
+plt.tight_layout()
+plt.show()
