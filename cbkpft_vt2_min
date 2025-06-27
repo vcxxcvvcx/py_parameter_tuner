@@ -1,0 +1,134 @@
+import math
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from tqdm import tqdm
+
+# tqdm 설정
+tqdm.pandas()
+
+# 데이터 로드
+data = pd.read_csv(r'C:\Users\user\Desktop\오늘파일\엠티\cbkp.txt', delimiter='\t', header=None, names=['Date', 'Open', 'High', 'Low', 'Close'])
+
+# OC 및 NOC 계산
+data['OC'] = np.abs(data['Open'] - data['Close'])
+data['NOC'] = (data['High'] - data['Low']) - data['OC']
+data['OC_NOC'] = np.maximum(data['OC'], data['NOC'])
+
+# 변동성 조합 계산
+data['HC_LC'] = np.maximum(data['High'] - data['Close'], data['Close'] - data['Low'])
+data['OH_OL'] = np.maximum(data['High'] - data['Open'], data['Open'] - data['Low'])
+data['HC_LC_OH_OL'] = np.maximum(data['HC_LC'], data['OH_OL'])
+data['HC_LC_OC_NOC'] = np.maximum(data['HC_LC'], data['OC_NOC'])
+data['OH_OL_OC_NOC'] = np.maximum(data['OH_OL'], data['OC_NOC'])
+data['HC_LC_OH_OL_OC_NOC'] = np.maximum.reduce([data['HC_LC'], data['OH_OL'], data['OC_NOC']])
+data['High_Low'] = data['High'] - data['Low']
+data['Close_Pct'] = data['Close'] * 0.01
+
+Buycoef = 0.672
+Sellcoef = 0.357
+
+# MDD, 승률, 트레이드 횟수 계산 함수
+def calculate_metrics(profits):
+    profits = np.array(profits)
+    equity_curve = np.cumsum(profits)
+    drawdown = equity_curve - np.maximum.accumulate(equity_curve)
+    mdd = np.min(drawdown)
+    trades = np.sum(profits != 0)
+    wins = np.sum(np.array(profits) > 0)
+    win_rate = wins / trades if trades > 0 else 0
+    return mdd, win_rate, trades
+
+# 최적 filter_min 탐색 함수
+def find_best_filter_min_by_trend(data, Buycoef, Sellcoef, trend='up'):
+    best_profit = -np.inf
+    best_filter = None
+    for filter_min in tqdm(np.arange(0.0015, 0.0060, 0.0001), desc=f"searching best filter_min ({trend})"):
+        buy_p, sell_p = calculate_profits_by_trend(data, Buycoef, Sellcoef, filter_min if trend=='up' else 0.003, filter_min if trend=='down' else 0.005)
+        total_profit = np.add(buy_p, sell_p)
+        total = np.sum(total_profit)
+        if total > best_profit:
+            best_profit = total
+            best_filter = filter_min
+    return best_filter, best_profit
+
+# 트렌드에 따른 수익 계산 함수
+def calculate_profits_by_trend(data, Buycoef, Sellcoef, filter_min_up, filter_min_down):
+    buy_profits = []
+    sell_profits = []
+    for i in range(1, len(data)):
+        prev_close = data['Close'].iloc[i-1]
+        today_open = data['Open'].iloc[i]
+        vol = data['HC_LC_OH_OL_OC_NOC'].iloc[i-1] / prev_close
+
+        if today_open > prev_close and vol > filter_min_up:
+            buy_price = today_open + math.ceil((data['HC_LC_OH_OL_OC_NOC'].iloc[i-1] * Buycoef) * 20) * 0.05
+            if data['High'].iloc[i] >= round(buy_price, 3):
+                buy_profits.append(data['Close'].iloc[i] - buy_price)
+            else:
+                buy_profits.append(0)
+            sell_profits.append(0)
+
+        elif today_open < prev_close and vol > filter_min_down:
+            sell_price = today_open - math.ceil((data['HC_LC_OH_OL_OC_NOC'].iloc[i-1] * Sellcoef) * 20) * 0.05
+            if data['Low'].iloc[i] <= round(sell_price, 3):
+                sell_profits.append(sell_price - data['Close'].iloc[i])
+            else:
+                sell_profits.append(0)
+            buy_profits.append(0)
+
+        else:
+            buy_profits.append(0)
+            sell_profits.append(0)
+
+    return buy_profits, sell_profits
+
+# 최적 필터 값 찾기
+filter_min_up, _ = find_best_filter_min_by_trend(data, Buycoef, Sellcoef, trend='up')
+filter_min_down, _ = find_best_filter_min_by_trend(data, Buycoef, Sellcoef, trend='down')
+
+# 수익 계산
+buy_p, sell_p = calculate_profits_by_trend(data, Buycoef, Sellcoef, filter_min_up, filter_min_down)
+total_profit = np.add(buy_p, sell_p)
+cumulative_total = np.cumsum(total_profit)
+
+# 지표 계산
+mdd_buy, win_buy, trades_buy = calculate_metrics(buy_p)
+mdd_sell, win_sell, trades_sell = calculate_metrics(sell_p)
+mdd_total, win_total, trades_total = calculate_metrics(total_profit)
+
+# 출력
+print(f"\nBest filter_min_up: {round(filter_min_up, 5)}")
+print(f"Best filter_min_down: {round(filter_min_down, 5)}")
+print(f"Cumulative Buy Profit: {round(np.sum(buy_p),3)}")
+print(f"Cumulative Sell Profit: {round(np.sum(sell_p),3)}")
+print(f"Total Profit: {round(cumulative_total[-1],3)}")
+
+print("\n[성과 지표]")
+print(f"Buy  - MDD: {round(mdd_buy, 2)}, Win Rate: {round(win_buy * 100, 2)}%, Trades: {trades_buy}")
+print(f"Sell - MDD: {round(mdd_sell, 2)}, Win Rate: {round(win_sell * 100, 2)}%, Trades: {trades_sell}")
+print(f"Total- MDD: {round(mdd_total, 2)}, Win Rate: {round(win_total * 100, 2)}%, Trades: {trades_total}")
+
+
+# 시각화
+plt.figure(figsize=(12, 6))
+plt.plot(np.cumsum(buy_p), label='Cumulative Buy Profit')
+plt.plot(np.cumsum(sell_p), label='Cumulative Sell Profit')
+plt.plot(cumulative_total, label='Total Profit')
+plt.xlabel('Index')
+plt.ylabel('Profit')
+plt.title('Equity Curve (Trend-Based Filter - Optimized)')
+plt.legend()
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
+
+# Best filter_min_up: 0.004
+# Best filter_min_down: 0.0018
+# Cumulative Buy Profit: 94.25
+# Cumulative Sell Profit: 218.3
+# Total Profit: 312.55
+# MDD: -35.15
+# Win Rate: 52.02%
+# Total Trades: 1463
