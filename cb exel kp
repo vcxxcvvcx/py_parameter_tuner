@@ -1,0 +1,85 @@
+import math
+import numpy as np
+import pandas as pd
+from tqdm.notebook import tqdm  
+
+# tqdm 설정
+tqdm.pandas()
+
+# ✅ 데이터 로드
+data = pd.read_csv(
+    r'C:\Users\알파1\Downloads\cbkp.txt',
+    sep=r'\s+',  # 공백 구분
+    header=None,
+    names=['Date', 'Open', 'High', 'Low', 'Close']
+)
+
+# ✅ 전처리 및 지표 계산
+data['OC'] = abs(data['Open'] - data['Close'])
+data['NOC'] = (data['High'] - data['Low']) - data['OC']
+
+data['HC_LC'] = data.apply(lambda row: max(row['High'] - row['Close'], row['Close'] - row['Low']), axis=1)
+data['OH_OL'] = data.apply(lambda row: max(row['High'] - row['Open'], row['Open'] - row['Low']), axis=1)
+data['OC_NOC'] = data.apply(lambda row: max(row['OC'], row['NOC']), axis=1)
+data['HC_LC_OH_OL'] = data.apply(lambda row: max(row['HC_LC'], row['OH_OL']), axis=1)
+data['HC_LC_OC_NOC'] = data.apply(lambda row: max(row['HC_LC'], row['OC_NOC']), axis=1)
+data['OH_OL_OC_NOC'] = data.apply(lambda row: max(row['OH_OL'], row['OC_NOC']), axis=1)
+data['HC_LC_OH_OL_OC_NOC'] = data.apply(lambda row: max(row['HC_LC'], row['OH_OL'], row['OC_NOC']), axis=1)
+data['High_Low'] = data['High'] - data['Low']
+data['Close_Pct'] = data['Close'] * 0.01
+
+data.dropna(inplace=True)
+
+# ✅ 파라미터
+volatility_list = [
+    'HC_LC', 'OH_OL', 'OC_NOC', 'HC_LC_OH_OL',
+    'HC_LC_OC_NOC', 'OH_OL_OC_NOC', 'HC_LC_OH_OL_OC_NOC',
+    'High_Low', 'Close_Pct'
+]
+
+Buycoef_values = np.arange(0.322, 2.720, 0.001)
+Sellcoef_values = np.arange(0.123, 1.152, 0.001)
+
+results = []
+
+# ✅ 최적화 루프
+for vol in tqdm(volatility_list, desc="🔍 Volatility별 최적화 진행 중"):
+    best_buycoef = 0
+    best_sellcoef = 0
+    max_buy_profit = float('-inf')
+    max_sell_profit = float('-inf')
+
+    for buycoef in tqdm(Buycoef_values, desc=f'📈 {vol} Buy 최적화', leave=False):
+        profits = []
+        for i in range(1, len(data)):
+            trigger = data['Open'].iloc[i] + math.ceil((data[vol].iloc[i - 1] * buycoef) * 20) * 0.05
+            if data['High'].iloc[i] >= round(trigger, 3):
+                profits.append(data['Close'].iloc[i] - trigger)
+            else:
+                profits.append(0)
+        total = sum(profits)
+        if total > max_buy_profit:
+            max_buy_profit = total
+            best_buycoef = buycoef
+
+    for sellcoef in tqdm(Sellcoef_values, desc=f'📉 {vol} Sell 최적화', leave=False):
+        profits = []
+        for i in range(1, len(data)):
+            trigger = data['Open'].iloc[i] - math.ceil((data[vol].iloc[i - 1] * sellcoef) * 20) * 0.05
+            if data['Low'].iloc[i] <= round(trigger, 3):
+                profits.append(trigger - data['Close'].iloc[i])
+            else:
+                profits.append(0)
+        total = sum(profits)
+        if total > max_sell_profit:
+            max_sell_profit = total
+            best_sellcoef = sellcoef
+
+    results.append((vol, best_buycoef, best_sellcoef, max_buy_profit, max_sell_profit, max_buy_profit + max_sell_profit))
+
+# ✅ 결과 출력
+print("\n🔚 최적화 완료. 결과 요약:\n")
+for r in results:
+    print(f'변동성: {r[0]}, 최적의 Buycoef: {round(r[1],4)}, '
+          f'최적의 Sellcoef: {round(r[2],4)}, '
+          f'매수 수익: {round(r[3],2)}, 매도 수익: {round(r[4],2)}, 총 수익: {round(r[5],2)}')
